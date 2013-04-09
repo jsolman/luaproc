@@ -20,6 +20,8 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 
+* Modified by Jeff Solinsky in 2012 to add support for sending messages
+* and creating channels from the parent thread.
 *****************************************************
 
 [luaproc.c]
@@ -28,6 +30,7 @@ THE SOFTWARE.
 
 #include <netdb.h>
 #include <pthread.h>
+#include <semaphore.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -74,6 +77,8 @@ struct stluaproc {
 ******************************/
 /* create a new lua process */
 static int luaproc_create_newproc( lua_State *L );
+/* add the current lua state as a luaproc process */
+static int luaproc_addproc( lua_State *L );
 /* send a message to a lua process */
 static int luaproc_send( lua_State *L );
 /* receive a message from a lua process */
@@ -93,17 +98,24 @@ static int luaproc_recycle_set( lua_State *L );
 
 /* luaproc function registration array - main (parent) functions */
 static const struct luaL_reg luaproc_funcs_parent[] = {
+    { "newproc", luaproc_create_newproc },
+    { "addproc", luaproc_addproc },
 	{ "newproc", luaproc_create_newproc },
 	{ "exit", luaproc_exit },
 	{ "createworker", luaproc_create_worker },
 	{ "destroyworker", luaproc_destroy_worker },
 	{ "recycle", luaproc_recycle_set },
+    { "send", luaproc_send },  // added
+    { "receive", luaproc_receive }, // added
+    { "newchannel", luaproc_create_channel }, // added
+    { "delchannel", luaproc_destroy_channel }, // added
 	{ NULL, NULL }
 };
 
 /* luaproc function registration array - newproc (child) functions */
 static const struct luaL_reg luaproc_funcs_child[] = {
 	{ "newproc", luaproc_create_newproc },
+    { "addproc", luaproc_addproc },
 	{ "send", luaproc_send },
 	{ "receive", luaproc_receive },
 	{ "newchannel", luaproc_create_channel },
@@ -114,6 +126,9 @@ static const struct luaL_reg luaproc_funcs_child[] = {
 	{ NULL, NULL }
 };
 
+#if 0
+/* load all libs in the lua implementation instead of only loading these
+ * custom libs */
 static void registerlib( lua_State *L, const char *name, lua_CFunction f ) {
 	lua_getglobal( L, "package" );
 	lua_getfield( L, -1, "preload" );
@@ -132,6 +147,7 @@ static void openlibs( lua_State *L ) {
 	registerlib( L, "math", luaopen_math );
 	registerlib( L, "debug", luaopen_debug );
 }
+#endif
 
 /* return status (boolean) indicating if lua process should be recycled */
 luaproc luaproc_recycle_pop( void ) {
@@ -481,6 +497,7 @@ static int luaproc_send( lua_State *L ) {
 	channel chan;
 	luaproc dstlp, self;
 	const char *chname = luaL_checkstring( L, 1 );
+	sem_t *sem_blocked;
 
 	/* get exclusive access to operate on channels */
 	pthread_mutex_lock( &mutex_channel );
@@ -511,8 +528,23 @@ static int luaproc_send( lua_State *L ) {
 
 		dstlp->args = lua_gettop( dstlp->lstate ) - 1;
 	
-		if ( sched_queue_proc( dstlp ) != LUAPROC_SCHED_QUEUE_PROC_OK ) {
+		if ( dstlp->stat == LUAPROC_STAT_SEMBLOCKED_RECV ) {
+			/* unlock channel access */
+			luaproc_unlock_channel( chan );
 
+			lua_getfield( dstlp->lstate, LUA_REGISTRYINDEX, "_SEM" );
+			sem_blocked = (sem_t *)lua_touserdata( dstlp->lstate, -1 );
+			lua_pop( dstlp->lstate, 1 );
+
+			if ( sem_blocked == 0 ) {
+				lua_pushnil( L );
+				lua_pushstring( L, "error waking recv process" );
+				return 2;
+			}
+
+			sem_post(sem_blocked);
+		}
+		else if ( sched_queue_proc( dstlp ) != LUAPROC_SCHED_QUEUE_PROC_OK ) {
 			/* unlock channel access */
 			luaproc_unlock_channel( chan );
 
@@ -525,9 +557,10 @@ static int luaproc_send( lua_State *L ) {
 			lua_pushstring( L, "error scheduling process" );
 			return 2;
 		}
-
-		/* unlock channel access */
-		luaproc_unlock_channel( chan );
+		else {
+			/* unlock channel access */
+			luaproc_unlock_channel( chan );
+		}
 	}
 
 	/* otherwise queue (block) the sending process */
@@ -535,7 +568,28 @@ static int luaproc_send( lua_State *L ) {
 
 		self = luaproc_getself( L );
 
-		if ( self != NULL ) {
+		if ( self->stat == LUAPROC_STAT_RUNNING_OUTSIDE ) {
+			lua_getfield( L, LUA_REGISTRYINDEX, "_SEM" );
+			sem_blocked = (sem_t *)lua_touserdata( L, -1 );
+			lua_pop( L, 1 );
+			self->stat = LUAPROC_STAT_SEMBLOCKED_SEND;
+			self->chan = chan;
+			/* add ourself to the response waiters for the channel */
+			luaproc_queue_sender( self );
+
+			/* unlock channel access -- could use luaproc_get_channel( self ) */
+			luaproc_unlock_channel( chan );
+
+			/* go to sleep waiting on a response */
+			sem_wait(sem_blocked);
+
+			/* restore state to running outside */
+			self->stat = LUAPROC_STAT_RUNNING_OUTSIDE;
+			/* return how many arguments were sent back */
+			/* should be the same as self->args */
+			return lua_gettop( L ) - 1;
+		}
+		else if ( self != NULL ) {
 			self->stat = LUAPROC_STAT_BLOCKED_SEND;
 			self->chan = chan;
 		}
@@ -554,6 +608,7 @@ static int luaproc_receive( lua_State *L ) {
 	channel chan;
 	luaproc srclp, self;
 	const char *chname = luaL_checkstring( L, 1 );
+	sem_t *sem_blocked;
 
 	/* get exclusive access to operate on channels */
 	pthread_mutex_lock( &mutex_channel );
@@ -586,7 +641,23 @@ static int luaproc_receive( lua_State *L ) {
 		lua_pushboolean( srclp->lstate, TRUE );
 		srclp->args = 1;
 
-		if ( sched_queue_proc( srclp ) != LUAPROC_SCHED_QUEUE_PROC_OK ) {
+		if ( srclp->stat == LUAPROC_STAT_SEMBLOCKED_SEND) {
+			/* unlock channel access */
+			luaproc_unlock_channel( chan );
+
+			lua_getfield( srclp->lstate, LUA_REGISTRYINDEX, "_SEM" );
+			sem_blocked = (sem_t *)lua_touserdata( srclp->lstate, -1 );
+			lua_pop( srclp->lstate, 1 );
+			if ( sem_blocked == 0 ) {
+				lua_pushnil( L );
+				lua_pushstring( L, "error waking send process" );
+				return 2;
+			}
+
+			/* wake up blocked sending thread */
+			sem_post(sem_blocked);
+		}
+		else if ( sched_queue_proc( srclp ) != LUAPROC_SCHED_QUEUE_PROC_OK ) {
 
 			/* unlock channel access */
 			luaproc_unlock_channel( chan );
@@ -600,9 +671,10 @@ static int luaproc_receive( lua_State *L ) {
 			lua_pushstring( L, "error scheduling process" );
 			return 2;
 		}
-
-		/* unlock channel access */
-		luaproc_unlock_channel( chan );
+		else {
+			/* unlock channel access */
+			luaproc_unlock_channel( chan );
+		}
 
 		return lua_gettop( L ) - 1;
 	}
@@ -624,7 +696,30 @@ static int luaproc_receive( lua_State *L ) {
 		else {
 			self = luaproc_getself( L );
 
-			if ( self != NULL ) {
+			
+			if ( self->stat == LUAPROC_STAT_RUNNING_OUTSIDE ) {
+				lua_getfield( L, LUA_REGISTRYINDEX, "_SEM" );
+				sem_blocked = (sem_t *)lua_touserdata( L, -1 );
+				lua_pop( L, 1 );
+				self->stat = LUAPROC_STAT_SEMBLOCKED_RECV;
+				self->chan = chan;
+
+				/* add ourself to the response waiters for the channel */
+				luaproc_queue_receiver( self );
+
+				/* unlock channel access -- could use luaproc_get_channel( self ) */
+				luaproc_unlock_channel( chan );
+
+				/* go to sleep waiting on a response */
+				sem_wait(sem_blocked);
+
+				/* restore state to running outside */
+				self->stat = LUAPROC_STAT_RUNNING_OUTSIDE;
+				/* return how many arguments were sent back */
+				/* should be the same as self->args */
+				return lua_gettop( L ) - 1;
+			}
+			else if ( self != NULL ) {
 				self->stat = LUAPROC_STAT_BLOCKED_RECV;
 				self->chan = chan;
 			}
@@ -633,6 +728,43 @@ static int luaproc_receive( lua_State *L ) {
 			return lua_yield( L, lua_gettop( L ));
 		}
 	}
+}
+
+/* create new luaproc */
+luaproc luaproc_addproc_state(lua_State *lpst) {
+
+	luaproc lp;
+	sem_t *sem_blocked;
+
+	/* store the luaproc struct in its own lua state */
+	lp = (luaproc )lua_newuserdata( lpst, sizeof( struct stluaproc ));
+	lua_setfield( lpst, LUA_REGISTRYINDEX, "_SELF" );
+
+	sem_blocked = (sem_t*)lua_newuserdata( lpst, sizeof( sem_t ));
+	sem_init(sem_blocked,0,0);
+	lua_setfield( lpst, LUA_REGISTRYINDEX, "_SEM" );
+
+	lp->lstate = lpst;
+
+	lp->stat = LUAPROC_STAT_RUNNING_OUTSIDE;
+	lp->args = 0;
+	lp->chan = NULL;
+	lp->destroyworker = 0;
+
+	/* return recently created lua process */
+	return lp;
+}
+
+static int luaproc_addproc( lua_State *L ) {
+
+	if ( luaproc_getself(L) != NULL ) {
+		lua_pushnil( L );
+		lua_pushfstring( L, "process already added for this thread" );
+	}
+	luaproc_addproc_state(L);
+
+	lua_pushboolean( L, TRUE );
+	return 0;
 }
 
 LUALIB_API int luaopen_luaproc( lua_State *L ) {
@@ -645,6 +777,9 @@ LUALIB_API int luaopen_luaproc( lua_State *L ) {
 
 	/* initialize local scheduler */
 	sched_init_local( LUAPROC_SCHED_DEFAULT_WORKER_THREADS );
+
+	/* initialize ourself as the first lua proc */
+	luaproc_addproc_state(L);
 
 	return 0;
 }

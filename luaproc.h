@@ -31,15 +31,21 @@ THE SOFTWARE.
 #include "channel.h"
 
 /* process is idle */
-#define LUAPROC_STAT_IDLE			0
+#define LUAPROC_STAT_IDLE				0
 /* process is ready to run */
-#define LUAPROC_STAT_READY			1
+#define LUAPROC_STAT_READY				1
+/* process is running outisde the scheduler */
+#define LUAPROC_STAT_RUNNING_OUTSIDE	2
 /* process is blocked on send */
-#define LUAPROC_STAT_BLOCKED_SEND	2
+#define LUAPROC_STAT_BLOCKED_SEND		3
 /* process is blocked on receive */
-#define LUAPROC_STAT_BLOCKED_RECV	3
+#define LUAPROC_STAT_BLOCKED_RECV		4
+/* process is suspended on send waiting for a semaphore */
+#define LUAPROC_STAT_SEMBLOCKED_SEND	5
+/* process is suspended on receive waiting for a semaphore */
+#define LUAPROC_STAT_SEMBLOCKED_RECV	6
 /* process is finished */
-#define LUAPROC_STAT_FINISHED		4
+#define LUAPROC_STAT_FINISHED   		7
 
 /* lua process pointer type */
 typedef struct stluaproc *luaproc;
