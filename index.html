@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html>
+
+  <head>
+    <meta charset='utf-8' />
+    <meta http-equiv="X-UA-Compatible" content="chrome=1" />
+    <meta name="description" content="Luaproc (with parent thread msg support) : Concurrent programming library for Lua" />
+
+    <link rel="stylesheet" type="text/css" media="screen" href="stylesheets/stylesheet.css">
+
+    <title>Luaproc (with parent thread msg support)</title>
+  </head>
+
+  <body>
+
+    <!-- HEADER -->
+    <div id="header_wrap" class="outer">
+        <header class="inner">
+          <a id="forkme_banner" href="https://github.com/jsolman/luaproc">View on GitHub</a>
+
+          <h1 id="project_title">Luaproc (with parent thread msg support)</h1>
+          <h2 id="project_tagline">Concurrent programming library for Lua</h2>
+
+            <section id="downloads">
+              <a class="zip_download_link" href="https://github.com/jsolman/luaproc/zipball/master">Download this project as a .zip file</a>
+              <a class="tar_download_link" href="https://github.com/jsolman/luaproc/tarball/master">Download this project as a tar.gz file</a>
+            </section>
+        </header>
+    </div>
+
+    <!-- MAIN CONTENT -->
+    <div id="main_content_wrap" class="outer">
+      <section id="main_content" class="inner">
+        <p>Originally Copyright 2008 Alexandre Skyrme, Noemi Rodriguez, Roberto Ierusalimschy
+See COPYRIGHT file</p>
+
+<p>Modified by Jeff Solinsky in 2012 to add support for sending messages and creating channels from the parent thread.</p>
+
+<pre>
+***********************************************************
+* API Functions                                           *
+***********************************************************
+ = mandatory arguments
+[] = optional arguments
+
+-- Create a new lua process
+-- Returns true if sucessful or nil, error_message if failed
+luaproc.newproc(  )
+
+-- Create a new worker (pthread) 
+-- Returns true if sucessful or nil, error_message if failed
+luaproc.createworker(  )
+
+-- Destroy a worker (pthread) 
+-- Returns true if sucessful or nil, error_message if failed
+luaproc.destroyworker(  )
+
+-- Send a message on a channel
+-- Returns true if sucessful or nil, error_message if failed
+-- Results in blocking if there is no matching receive
+luaproc.send( , ,
+              [string msg2], [string msg3], ... )
+
+-- Receive a message on a channel
+-- Returns message string(s) if sucessful or nil, error_message if failed
+-- Results in blocking if there is no matching send
+-- and the asynchronous flag is not set (nil) or set to false
+luaproc.receive( , [boolean asynchronous] )
+
+-- Create a new channel
+-- Returns true if sucessful or nil, error_message if failed
+luaproc.newchannel(  )
+
+-- Destroy a channel
+-- Returns true if sucessful or nil, error_message if failed
+luaproc.delchannel(  )
+
+-- Set maximum lua processes that should be recycled (default = 0)
+-- Returns true if sucessful or nil, error_message if failed
+luaproc.recycle(  )
+
+***********************************************************
+* Following two functions only available to parent thread *
+* that originally called require("luaproc")               *
+***********************************************************
+-- Add a co-routine as a luaproc process
+-- Any coroutine that will call luaproc functions
+-- send, receive, newchannel, or delchannel must call this
+-- first.  
+luaproc.addproc(  )
+
+-- Synchronize workers (pthreads) and exit after all lua processes have ended
+-- No return, finishes execution.
+luaproc.exit(  )
+
+</pre>
+      </section>
+    </div>
+
+    <!-- FOOTER  -->
+    <div id="footer_wrap" class="outer">
+      <footer class="inner">
+        <p class="copyright">Luaproc (with parent thread msg support) maintained by <a href="https://github.com/jsolman">jsolman</a></p>
+        <p>Published with <a href="http://pages.github.com">GitHub Pages</a></p>
+      </footer>
+    </div>
+
+    
+
+  </body>
+</html>
