@@ -98,7 +98,6 @@ static int luaproc_recycle_set( lua_State *L );
 
 /* luaproc function registration array - main (parent) functions */
 static const struct luaL_reg luaproc_funcs_parent[] = {
-    { "newproc", luaproc_create_newproc },
     { "addproc", luaproc_addproc },
 	{ "newproc", luaproc_create_newproc },
 	{ "exit", luaproc_exit },
