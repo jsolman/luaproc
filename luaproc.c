@@ -210,7 +210,7 @@ int luaproc_recycle_push( luaproc lp ) {
 }
 
 /* create new luaproc */
-luaproc luaproc_new( const char *code, int destroyflag ) {
+luaproc luaproc_new( const char *code, size_t codelen, int destroyflag ) {
 
 	luaproc lp;
 	int ret;
@@ -227,13 +227,14 @@ luaproc luaproc_new( const char *code, int destroyflag ) {
 	lp->destroyworker = destroyflag;
 
 	/* load standard libraries */
-	openlibs( lpst );
+	//openlibs( lpst );
+	luaL_openlibs( lpst );
 
 	/* register luaproc's own functions */
 	luaL_register( lpst, "luaproc", luaproc_funcs_child );
 
 	/* load process' code */
-	ret = luaL_loadstring( lpst, code );
+	ret = luaL_loadbuffer( lpst, code, codelen, "" );
 	/* in case of errors, destroy recently created lua process */
 	if ( ret != 0 ) {
 		lua_close( lpst );
@@ -312,7 +313,7 @@ static int luaproc_destroy_worker( lua_State *L ) {
 
 	/* create new lua process with empty code and destroy worker flag set to true
 	   (ie, conclusion of lua process WILL result in worker thread destruction */
-	lp = luaproc_new( "", TRUE );
+	lp = luaproc_new( "", TRUE, 0 );
 
 	/* ensure process creation was successfull */
 	if ( lp == NULL ) {
@@ -368,9 +369,9 @@ luaproc luaproc_recycle( luaproc lp, const char *code ) {
 
 /* create and schedule a new lua process (luaproc.newproc) */
 static int luaproc_create_newproc( lua_State *L ) {
-
+	size_t codelen;
 	/* check if first argument is a string (lua code) */
-	const char *code = luaL_checkstring( L, 1 );
+	const char *code = luaL_checklstring( L, 1, &codelen );
 
 	/* new lua process pointer */
 	luaproc lp;
@@ -386,7 +387,7 @@ static int luaproc_create_newproc( lua_State *L ) {
 	else {
 		/* create new lua process with destroy worker flag set to false
 		   (ie, conclusion of lua process will NOT result in worker thread destruction */
-		lp = luaproc_new( code, FALSE );
+		lp = luaproc_new( code, codelen, FALSE );
 	}
 
 	/* ensure process creation was successfull */
